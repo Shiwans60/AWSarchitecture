@@ -1,0 +1,26 @@
+spring:
+  application:
+    name: APIGateway
+
+  cloud:
+    gateway:
+      server:
+        webmvc:
+          routes:
+            - id: UserService
+              uri: lb://USERSERVICE
+              predicates:
+                - Path=/Users/**
+
+            - id: OrderService
+              uri: lb://ORDERSERVICE
+              predicates:
+                - Path=/Orders/**
+
+server:
+  port: 8080
+
+eureka:
+  client:
+    service-url:
+      defaultZone: http://localhost:8761/eureka/
