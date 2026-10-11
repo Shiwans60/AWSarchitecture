@@ -1,0 +1,149 @@
+#
+#services:
+#  postgres:
+#    image: postgres:15-alpine
+#    environment:
+#      POSTGRES_USER: dbuser
+#      POSTGRES_PASSWORD: dbpassword
+#      POSTGRES_DB: userdb
+#    ports:
+#      - "5433:5432"
+#
+#  rabbitmq:
+#    image: rabbitmq:3-management-alpine
+#    ports:
+#      - "5672:5672"   # AMQP protocol port
+#      - "15672:15672" # Management UI port
+#volumes:
+#  postgres_data:
+
+services:
+  # Infrastructure
+
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: dbuser
+      POSTGRES_PASSWORD: dbpassword
+      POSTGRES_DB: userdb
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - microservices-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dbuser -d userdb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: appuser
+      RABBITMQ_DEFAULT_PASS: apppassword
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    networks:
+      - microservices-net
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Service Registry
+
+  service-registry:
+    build:
+      context: ./EurekaServiceRegistry
+    ports:
+      - "8761:8761"
+    environment:
+      SERVER_PORT: 8761
+      EUREKA_CLIENT_REGISTER_WITH_EUREKA: "false"
+      EUREKA_CLIENT_FETCH_REGISTRY: "false"
+    networks:
+      - microservices-net
+    restart: on-failure
+
+  # User Service
+
+  user-service:
+    build:
+      context: ./UserService
+    ports:
+      - "8081:8081"
+    environment:
+      SPRING_APPLICATION_NAME: UserService
+      SERVER_PORT: 8081
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/userdb
+      SPRING_DATASOURCE_USERNAME: dbuser
+      SPRING_DATASOURCE_PASSWORD: dbpassword
+      SPRING_RABBITMQ_HOST: rabbitmq
+      SPRING_RABBITMQ_PORT: 5672
+      SPRING_RABBITMQ_USERNAME: appuser
+      SPRING_RABBITMQ_PASSWORD: apppassword
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://service-registry:8761/eureka/
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      service-registry:
+        condition: service_started
+    networks:
+      - microservices-net
+    restart: on-failure
+
+  # Order Service
+
+  order-service:
+    build:
+      context: ./OrderService
+    ports:
+      - "8082:8082"
+    environment:
+      SPRING_APPLICATION_NAME: OrderService
+      SERVER_PORT: 8082
+      SPRING_DATA_MONGODB_URI: "${MONGODB_URI:?Set MONGODB_URI in the root .env file}"
+      SPRING_RABBITMQ_HOST: rabbitmq
+      SPRING_RABBITMQ_PORT: 5672
+      SPRING_RABBITMQ_USERNAME: appuser
+      SPRING_RABBITMQ_PASSWORD: apppassword
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://service-registry:8761/eureka/
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      service-registry:
+        condition: service_started
+    networks:
+      - microservices-net
+    restart: on-failure
+
+  # API Gateway
+
+  api-gateway:
+    build:
+      context: ./APIGateway
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_APPLICATION_NAME: APIGateway
+      SERVER_PORT: 8080
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://service-registry:8761/eureka/
+    depends_on:
+      service-registry:
+        condition: service_started
+    networks:
+      - microservices-net
+    restart: on-failure
+
+networks:
+  microservices-net:
+    driver: bridge
+
+volumes:
+  postgres_data:
